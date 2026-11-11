@@ -82,11 +82,25 @@ export function getErrorMessage(
   if (typeof error === 'object' && error !== null) {
     const candidate = error as {
       message?: string
-      response?: { message?: string; data?: Record<string, { message?: string }> }
+      response?: { message?: string; data?: unknown }
     }
-    const fieldMessage = candidate.response?.data
-      ? Object.values(candidate.response.data).find((item) => item?.message)?.message
-      : undefined
+    // Resposta do PB: { code, message, data } — a mensagem do hook vem em data.message.
+    const directData = candidate.response?.data
+    if (typeof directData === 'string' && directData.trim()) return directData
+    if (
+      directData &&
+      typeof directData === 'object' &&
+      'message' in (directData as { message?: unknown }) &&
+      typeof (directData as { message?: unknown }).message === 'string' &&
+      (directData as { message: string }).message.trim()
+    )
+      return (directData as { message: string }).message
+    const fieldMessage =
+      directData && typeof directData === 'object' && !Array.isArray(directData)
+        ? Object.values(directData as Record<string, { message?: string }>).find(
+            (item) => item && typeof item === 'object' && 'message' in item,
+          )?.message
+        : undefined
     if (fieldMessage) return fieldMessage
     if (candidate.response?.message && candidate.response.message !== 'Failed to authenticate.')
       return candidate.response.message
