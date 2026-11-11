@@ -102,7 +102,7 @@ function formatarData(year, month, day) {
 }
 
 // "Wed Nov 25 2026 00:00:00 GMT+0000 (Coordinated Universal Time)",
-// "Nov 25 2026", "25 Nov 2026"
+// "Nov 25 2026", "25 Nov 2026", "Nov 25 2026, 00:00:00 (UTC -03:00)"
 function dataInglesa(text) {
   const normalized = semAcentos(text)
   let match = normalized.match(/\b([a-z]{3}) ([a-z]{3}) (\d{1,2}) (\d{4})\b/)
@@ -116,6 +116,14 @@ function dataInglesa(text) {
     return formatarData(Number(match[3]), MESES_EN[match[2]], Number(match[1]))
   return ''
 }
+// Datas serializadas da exportação: "2026-11-09", "2026-11-09 12:00:00.000Z".
+function dataISO(text) {
+  const match = String(text || '')
+    .trim()
+    .match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (!match) return ''
+  return formatarData(Number(match[1]), Number(match[2]), Number(match[3]))
+}
 
 function normalizarDataBase(raw) {
   const text = limparTexto(raw)
@@ -126,7 +134,12 @@ function normalizarDataBase(raw) {
   const inglesa = dataInglesa(text)
   if (inglesa) return inglesa
 
-  let match = text.match(/(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})/)
+  // ISO primeiro: sem isso, "2026-11-09" casa no padrão dia-mês-ano pelo
+  // final ("26-11-09") e vira 26/11/2009.
+  const iso = dataISO(text)
+  if (iso) return iso
+
+  let match = text.match(/(?:^|\D)(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})(?=\D|$)/)
   if (match) {
     let year = Number(match[3])
     if (year < 100) year += year >= 70 ? 1900 : 2000
@@ -259,6 +272,17 @@ function identificarCampo(header) {
     value.indexOf('valor original') >= 0
   )
     return 'valor'
+  // Rótulo real da pivot do OMIE: a coluna de valores chama "A Pagar ou Receber".
+  // "Contas a Pagar" é o título da pivot, não uma coluna — não pode virar valor.
+  if (value.indexOf('contas a pagar') < 0) {
+    if (
+      value.indexOf('a pagar ou receber') >= 0 ||
+      value.indexOf('pagar ou receber') >= 0 ||
+      value.indexOf('a pagar') >= 0 ||
+      value.indexOf('a receber') >= 0
+    )
+      return 'valor'
+  }
   if (
     value.indexOf('departamento') >= 0 ||
     value.indexOf('centro de custo') >= 0 ||
@@ -333,6 +357,16 @@ function inferirMapaPorConteudo(rows) {
   const secondDate = orderedDates[1]
   if (secondDate) map.vencimento = secondDate.index
   return map
+}
+
+function linhaSemRotuloSoValor(row, map) {
+  if (!row || !row.cells) return false
+  const filled = []
+  for (let index = 0; index < row.cells.length; index += 1) {
+    if (map && map.valor === index) continue
+    if (limparTexto(row.cells[index])) filled.push(index)
+  }
+  return filled.length === 0
 }
 
 function linhaDeTotal(cells) {
@@ -427,7 +461,8 @@ function processarMarkdown(markdown) {
       if (!row.cells.some((cell) => limparTexto(cell))) continue
       totalRows += 1
       const content = row.cells.join(' | ').slice(0, 950)
-      if (linhaDeTotal(row.cells)) {
+      // Linha de total sem rótulo ("Total do período" pode vir só com o valor).
+      if (linhaDeTotal(row.cells) || linhaSemRotuloSoValor(row, map)) {
         issues.push({
           line: row.line,
           type: 'linha_ignorada',
@@ -517,5 +552,6 @@ module.exports = {
   normalizarData: normalizarData,
   normalizarValor: normalizarValor,
   extrairTabelas: extrairTabelas,
+  descreverTabelas: descreverTabelas,
   processarMarkdown: processarMarkdown,
 }
