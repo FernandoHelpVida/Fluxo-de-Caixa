@@ -131,14 +131,13 @@ function normalizarDataBase(raw) {
     .replace(/\(.*?\)/g, ' ')
     .replace(/GMT[+-]\d{4}/gi, ' ')
   if (!text) return ''
-  const inglesa = dataInglesa(text)
+  const inglesa = dataInglesa(text) || dataInglesa(dataComHora(text))
   if (inglesa) return inglesa
 
   // ISO primeiro: sem isso, "2026-11-09" casa no padrão dia-mês-ano pelo
   // final ("26-11-09") e vira 26/11/2009.
-  const iso = dataISO(text)
+  const iso = dataISO(text) || dataISO(dataComHora(text))
   if (iso) return iso
-
   let match = text.match(/(?:^|\D)(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})(?=\D|$)/)
   if (match) {
     let year = Number(match[3])
@@ -179,6 +178,15 @@ function removerRotuloPivot(text) {
 
 function normalizarData(raw) {
   return normalizarDataBase(removerRotuloPivot(limparTexto(raw)))
+}
+
+// Célula vinda com hora junto ("2026-11-09 00:00:00", "09/11/2026 14:35"):
+// isola a parte de data antes dos reconhecedores.
+function dataComHora(raw) {
+  const text = String(raw || '').trim()
+  if (!/\d{1,2}:\d{2}/.test(text)) return ''
+  const match = text.match(/^(\d{4}-\d{2}-\d{2}|\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})\b/)
+  return match ? match[1] : ''
 }
 
 // ---- Reconhecimento de valores ----
@@ -384,6 +392,19 @@ function linhaDeTotal(cells) {
     )
 }
 
+function primeiraLinhaDeDados(rows) {
+  for (let index = 0; index < Math.min(rows.length, 20); index += 1) {
+    const row = rows[index]
+    if (!row.cells.some((cell) => limparTexto(cell))) continue
+    if (linhaDeTotal(row.cells)) continue
+    if (linhaSeparadora(row.cells)) continue
+    const candidate = mapaCabecalho(row.cells)
+    if (!cabecalhoValido(candidate)) continue
+    return { index: index - 1, map: candidate }
+  }
+  return null
+}
+
 function extrairTabelas(markdown) {
   const lines = String(markdown || '').split(/\r?\n/)
   const tables = []
@@ -446,6 +467,22 @@ function processarMarkdown(markdown) {
         headerIndex = -1
         map = inferred
         porConteudo = true
+        foundHeader = true
+      }
+    }
+
+    // 3) A conversão para markdown pode rotular TODAS as colunas como "column_1,
+    //    column_2..." (nada reconhecível nem por nome nem por conteúdo, porque as
+    //    células de texto também viram coluna). Nesse caso, trata a primeira linha
+    //    de dados como cabeçalho: as colunas rotuladas por nome ("Previsão",
+    //    "A Pagar ou Receber") ficam em posições fixas, o que permite mapear
+    //    lançamento a lançamento com o rótulo original do arquivo.
+    if (!foundHeader) {
+      const first = primeiraLinhaDeDados(rows)
+      if (first) {
+        headerIndex = first.index
+        map = first.map
+        porConteudo = false
         foundHeader = true
       }
     }

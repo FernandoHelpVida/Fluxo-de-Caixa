@@ -1,6 +1,8 @@
 // Importação OMIE — roteador do app HelpVida.
-// O parser (puro, sem $app) vive em importacao_parser.js e é carregado via require().
-// A consolidação (persistência) vive em importacao_processar.js.
+// Toda a lógica vive DENTRO do callback do handler: o JSVM executa cada handler
+// como um programa isolado, sem acesso a declarações de escopo externo.
+// O parser (puro) vem de importacao_parser.js e a persistência de
+// importacao_processar.js — ambos carregados com require() dentro do handler.
 
 routerAdd(
   'POST',
@@ -28,9 +30,15 @@ routerAdd(
     let result = null
     let minDate = ''
     let maxDate = ''
-    let resposta = null
     try {
       const converted = $documents.toMarkdown({ record: importRecord, field: 'arquivo' })
+      console.log(
+        'importacao: md_len=' +
+          String(converted.markdown || '').length +
+          ' truncated=' +
+          !!converted.truncated,
+      )
+      console.log('importacao: md_amostra=' + String(converted.markdown || '').slice(0, 900))
       if (converted.truncated) {
         importRecord.set('status', 'erro')
         importRecord.set(
@@ -38,12 +46,9 @@ routerAdd(
           'A planilha excedeu o limite de leitura e não foi importada para evitar uma consolidação parcial.',
         )
         $app.save(importRecord)
-        resposta = e.json(400, {
-          status: 'erro',
-          message:
-            'A planilha é muito extensa para esta versão. Nenhum lançamento foi substituído.',
-        })
-        return resposta
+        throw new BadRequestError(
+          'A planilha é muito extensa para esta versão. Nenhum lançamento foi substituído.',
+        )
       }
 
       result = parser.processarMarkdown(converted.markdown)
@@ -64,8 +69,7 @@ routerAdd(
         importRecord.set('status', 'erro')
         importRecord.set('mensagem', String(firstIssue.description).slice(0, 1150))
         $app.save(importRecord)
-        resposta = e.json(400, { status: 'erro', message: firstIssue.description })
-        return resposta
+        throw new BadRequestError(firstIssue.description)
       }
 
       const periods = {}
@@ -79,19 +83,28 @@ routerAdd(
 
       processar.consolidar($app, importRecord.id, result, periods)
     } catch (error) {
+      if (error instanceof BadRequestError) throw error
+      console.log(
+        'importacao: erro_inesperado=' +
+          String(error && error.message ? error.message : error) +
+          ' stack=' +
+          String(error && error.stack ? error.stack : ''),
+      )
       try {
         const latest = $app.findRecordById('importacoes', importRecord.id)
         if (latest.getString('status') === 'processando') {
           latest.set('status', 'erro')
+          const detail = String(error && error.message ? error.message : '')
           latest.set(
             'mensagem',
-            'Falha ao ler ou consolidar a planilha. Confira o formato do arquivo e tente novamente.',
+            'Falha ao ler ou consolidar a planilha: ' + (detail ? detail : 'erro desconhecido'),
           )
           $app.save(latest)
         }
       } catch (_) {}
       throw new BadRequestError(
-        'Não foi possível processar a planilha. Confira o arquivo e tente novamente.',
+        'Não foi possível processar a planilha: ' +
+          String(error && error.message ? error.message : 'erro desconhecido'),
       )
     }
 
