@@ -1,355 +1,11 @@
+// Importação OMIE — roteador do app HelpVida.
+// O parser (puro, sem $app) vive em importacao_parser.js e é carregado via require().
+
 routerAdd(
   'POST',
   '/backend/v1/helpvida/importar',
   (e) => {
-    function limparTexto(value) {
-      return String(value || '')
-        .replace(/<br\s*\/?\s*>/gi, ' ')
-        .replace(/&nbsp;/gi, ' ')
-        .replace(/\*\*/g, '')
-        .replace(/\\\|/g, '|')
-        .replace(/\s+/g, ' ')
-        .trim()
-    }
-
-    function semAcentos(value) {
-      return limparTexto(value)
-        .toLowerCase()
-        .replace(/[áàãâä]/g, 'a')
-        .replace(/[éèêë]/g, 'e')
-        .replace(/[íìîï]/g, 'i')
-        .replace(/[óòõôö]/g, 'o')
-        .replace(/[úùûü]/g, 'u')
-        .replace(/[ç]/g, 'c')
-        .replace(/[^a-z0-9]+/g, ' ')
-        .trim()
-    }
-
-    function separarLinhaMarkdown(line) {
-      let text = String(line || '').trim()
-      if (text.charAt(0) === '|') text = text.slice(1)
-      if (text.charAt(text.length - 1) === '|') text = text.slice(0, -1)
-      const marker = '__PIPE_ESCAPADO__'
-      return text
-        .replace(/\\\|/g, marker)
-        .split('|')
-        .map((cell) => limparTexto(cell.replace(new RegExp(marker, 'g'), '|')))
-    }
-
-    function linhaSeparadora(cells) {
-      return cells.length > 0 && cells.every((cell) => /^:?-{2,}:?$/.test(cell.replace(/\s/g, '')))
-    }
-
-    function identificarCampo(header) {
-      const value = semAcentos(header)
-      if (!value) return ''
-      if (
-        value.indexOf('previs') >= 0 ||
-        value === 'data prevista' ||
-        value === 'previsao pagamento'
-      )
-        return 'previsao'
-      if (
-        value.indexOf('razao social') >= 0 ||
-        value === 'fornecedor' ||
-        value.indexOf('nome fornecedor') >= 0 ||
-        value === 'favorecido'
-      )
-        return 'razao_social'
-      if (value.indexOf('vencimento') >= 0 || value === 'data venc') return 'vencimento'
-      if (
-        value === 'registro' ||
-        value.indexOf('numero titulo') >= 0 ||
-        value === 'titulo' ||
-        value === 'id titulo'
-      )
-        return 'registro'
-      if (
-        value.indexOf('categoria') >= 0 ||
-        value.indexOf('classificacao') >= 0 ||
-        value === 'grupo'
-      )
-        return 'categoria'
-      if (
-        value.indexOf('conta corrente') >= 0 ||
-        value === 'conta bancaria' ||
-        value === 'banco' ||
-        value === 'conta'
-      )
-        return 'conta_corrente'
-      if (
-        value.indexOf('nota fiscal') >= 0 ||
-        value === 'nf' ||
-        value === 'n f' ||
-        value.indexOf('numero nf') >= 0
-      )
-        return 'nota_fiscal'
-      if (
-        value === 'valor' ||
-        value.indexOf('valor a pagar') >= 0 ||
-        value.indexOf('valor titulo') >= 0 ||
-        value.indexOf('valor previsto') >= 0 ||
-        value.indexOf('valor liquido') >= 0
-      )
-        return 'valor'
-      if (
-        value.indexOf('departamento') >= 0 ||
-        value.indexOf('centro de custo') >= 0 ||
-        value === 'setor'
-      )
-        return 'departamento'
-      if (value === 'data' || value === 'data pagamento') return 'previsao'
-      return ''
-    }
-
-    function mapaCabecalho(cells) {
-      const map = {}
-      cells.forEach((cell, index) => {
-        const field = identificarCampo(cell)
-        if (field && map[field] === undefined) map[field] = index
-      })
-      return map
-    }
-
-    function cabecalhoValido(map) {
-      return map.valor !== undefined && (map.previsao !== undefined || map.vencimento !== undefined)
-    }
-
-    function diasNoMes(year, month) {
-      return new Date(Date.UTC(year, month, 0)).getUTCDate()
-    }
-
-    function formatarData(year, month, day) {
-      if (
-        year < 1900 ||
-        year > 2200 ||
-        month < 1 ||
-        month > 12 ||
-        day < 1 ||
-        day > diasNoMes(year, month)
-      )
-        return ''
-      return (
-        String(year) +
-        '-' +
-        String(month).padStart(2, '0') +
-        '-' +
-        String(day).padStart(2, '0') +
-        ' 12:00:00.000Z'
-      )
-    }
-
-    function normalizarData(raw) {
-      const text = limparTexto(raw).replace(/\u00a0/g, ' ')
-      if (!text) return ''
-      let match = text.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})(?:\s|$)/)
-      if (match) {
-        let year = Number(match[3])
-        if (year < 100) year += year >= 70 ? 1900 : 2000
-        return formatarData(year, Number(match[2]), Number(match[1]))
-      }
-      match = text.match(/^(\d{4})[\/.-](\d{1,2})[\/.-](\d{1,2})(?:[T\s]|$)/)
-      if (match) return formatarData(Number(match[1]), Number(match[2]), Number(match[3]))
-
-      const normalized = semAcentos(text)
-      const months = {
-        janeiro: 1,
-        fevereiro: 2,
-        marco: 3,
-        abril: 4,
-        maio: 5,
-        junho: 6,
-        julho: 7,
-        agosto: 8,
-        setembro: 9,
-        outubro: 10,
-        novembro: 11,
-        dezembro: 12,
-      }
-      match = normalized.match(/^(\d{1,2})(?: de)? ([a-z]+)(?: de)? (\d{4})/)
-      if (match && months[match[2]])
-        return formatarData(Number(match[3]), months[match[2]], Number(match[1]))
-
-      if (/^\d{5}(?:\.0+)?$/.test(text)) {
-        const serial = Math.floor(Number(text))
-        if (serial > 20000 && serial < 100000) {
-          const date = new Date(Date.UTC(1899, 11, 30) + serial * 86400000)
-          return formatarData(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate())
-        }
-      }
-      return ''
-    }
-
-    function normalizarValor(raw) {
-      let text = limparTexto(raw).replace(/\u00a0/g, '')
-      if (!text) return null
-      let negative = false
-      if (/^\(.*\)$/.test(text)) {
-        negative = true
-        text = text.slice(1, -1)
-      }
-      text = text
-        .replace(/R\$/gi, '')
-        .replace(/\s/g, '')
-        .replace(/[^0-9,.-]/g, '')
-      if (text.charAt(text.length - 1) === '-') {
-        negative = true
-        text = text.slice(0, -1)
-      }
-      if (text.charAt(0) === '-') {
-        negative = true
-        text = text.slice(1)
-      }
-      const comma = text.lastIndexOf(',')
-      const dot = text.lastIndexOf('.')
-      if (comma >= 0 && dot >= 0) {
-        text = comma > dot ? text.replace(/\./g, '').replace(',', '.') : text.replace(/,/g, '')
-      } else if (comma >= 0) {
-        const decimals = text.length - comma - 1
-        text =
-          decimals > 0 && decimals <= 2
-            ? text.replace(/\./g, '').replace(',', '.')
-            : text.replace(/,/g, '')
-      } else if (dot >= 0 && text.length - dot - 1 > 2) {
-        text = text.replace(/\./g, '')
-      }
-      const value = Number(text)
-      if (!Number.isFinite(value)) return null
-      return negative ? -value : value
-    }
-
-    function linhaDeTotal(cells) {
-      return cells
-        .slice(0, Math.min(cells.length, 5))
-        .map(semAcentos)
-        .some(
-          (value) =>
-            value === 'total' ||
-            value === 'subtotal' ||
-            value === 'total geral' ||
-            value.indexOf('subtotal ') === 0 ||
-            value.indexOf('total geral ') === 0,
-        )
-    }
-
-    function extrairTabelas(markdown) {
-      const lines = String(markdown || '').split(/\r?\n/)
-      const tables = []
-      let current = []
-      lines.forEach((line, index) => {
-        if (/^\s*\|.*\|\s*$/.test(line)) {
-          current.push({ line: index + 1, cells: separarLinhaMarkdown(line) })
-        } else if (current.length) {
-          tables.push(current)
-          current = []
-        }
-      })
-      if (current.length) tables.push(current)
-      return tables
-    }
-
-    function processarMarkdown(markdown) {
-      const tables = extrairTabelas(markdown)
-      const entries = []
-      const issues = []
-      let totalRows = 0
-      let foundHeader = false
-
-      tables.forEach((rows) => {
-        let headerIndex = -1
-        let map = {}
-        for (let index = 0; index < rows.length; index += 1) {
-          const candidate = mapaCabecalho(rows[index].cells)
-          if (cabecalhoValido(candidate)) {
-            headerIndex = index
-            map = candidate
-            foundHeader = true
-            break
-          }
-        }
-        if (headerIndex < 0) return
-
-        const carried = { razao_social: '', categoria: '', conta_corrente: '', departamento: '' }
-        for (let index = headerIndex + 1; index < rows.length; index += 1) {
-          const row = rows[index]
-          if (linhaSeparadora(row.cells)) continue
-          if (cabecalhoValido(mapaCabecalho(row.cells))) continue
-          if (!row.cells.some((cell) => limparTexto(cell))) continue
-          totalRows += 1
-          const content = row.cells.join(' | ').slice(0, 950)
-          if (linhaDeTotal(row.cells)) {
-            issues.push({
-              line: row.line,
-              type: 'linha_ignorada',
-              description: 'Linha de subtotal ou total removida da consolidação.',
-              content: content,
-            })
-            continue
-          }
-          const get = (field) =>
-            map[field] === undefined ? '' : limparTexto(row.cells[map[field]])
-          Object.keys(carried).forEach((field) => {
-            const value = get(field)
-            if (value) carried[field] = value
-          })
-          const previsaoRaw = get('previsao') || get('vencimento')
-          const previsao = normalizarData(previsaoRaw)
-          if (!previsao) {
-            issues.push({
-              line: row.line,
-              type: 'data_invalida',
-              description: 'Data de previsão ou vencimento fora do padrão esperado.',
-              content: content,
-            })
-            continue
-          }
-          const vencimentoRaw = get('vencimento')
-          const vencimento = vencimentoRaw ? normalizarData(vencimentoRaw) : previsao
-          if (vencimentoRaw && !vencimento) {
-            issues.push({
-              line: row.line,
-              type: 'data_invalida',
-              description: 'Data de vencimento fora do padrão esperado.',
-              content: content,
-            })
-            continue
-          }
-          const valor = normalizarValor(get('valor'))
-          if (valor === null || valor === 0) {
-            issues.push({
-              line: row.line,
-              type: 'valor_invalido',
-              description: 'Valor vazio, igual a zero ou em formato inválido.',
-              content: content,
-            })
-            continue
-          }
-          entries.push({
-            previsao: previsao,
-            razao_social: get('razao_social') || carried.razao_social,
-            vencimento: vencimento || previsao,
-            registro: get('registro'),
-            categoria: get('categoria') || carried.categoria,
-            conta_corrente: get('conta_corrente') || carried.conta_corrente,
-            nota_fiscal: get('nota_fiscal'),
-            valor: valor,
-            departamento: get('departamento') || carried.departamento,
-            periodo: previsao.slice(0, 7),
-            line: row.line,
-          })
-        }
-      })
-
-      if (!foundHeader)
-        issues.push({
-          line: 0,
-          type: 'cabecalho_invalido',
-          description:
-            'Não foi encontrada uma tabela com colunas de data e valor. Confira os cabeçalhos da pivot do OMIE.',
-          content: '',
-        })
-      return { entries: entries, issues: issues, totalRows: totalRows, foundHeader: foundHeader }
-    }
+    const parser = require(`${__hooks}/importacao_parser.js`)
 
     function atualizarImportacaoComErro(record, message) {
       record.set('status', 'erro')
@@ -364,7 +20,7 @@ routerAdd(
     if (!files || files.length === 0)
       throw new BadRequestError('Selecione uma planilha .xlsx para importar.')
     const file = files[0]
-    const originalName = limparTexto(file.name || 'planilha-omie.xlsx')
+    const originalName = parser.limparTexto(file.name || 'planilha-omie.xlsx')
     if (originalName && !/\.xlsx$/i.test(originalName))
       throw new BadRequestError('O arquivo precisa estar no formato .xlsx.')
 
@@ -388,7 +44,7 @@ routerAdd(
         )
       }
 
-      const result = processarMarkdown(converted.markdown)
+      const result = parser.processarMarkdown(converted.markdown)
       if (!result.foundHeader || result.entries.length === 0) {
         const firstIssue = result.issues[0] || {
           line: 0,
@@ -498,6 +154,7 @@ routerAdd(
         periodo_fim: maxDate,
       })
     } catch (error) {
+      if (error instanceof BadRequestError) throw error
       const publicMessage =
         error && error.message
           ? error.message
@@ -507,13 +164,9 @@ routerAdd(
         if (latest.getString('status') === 'processando')
           atualizarImportacaoComErro(
             latest,
-            error && error.status === 422
-              ? publicMessage
-              : 'Falha ao ler ou consolidar a planilha.',
+            'Falha ao ler ou consolidar a planilha. Confira o formato do arquivo e tente novamente.',
           )
       } catch (_) {}
-      if (error && (error.status === 400 || error.status === 422))
-        throw new BadRequestError(publicMessage)
       throw new BadRequestError(
         'Não foi possível processar a planilha. Confira o arquivo e tente novamente.',
       )
