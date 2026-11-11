@@ -102,9 +102,20 @@ export function getErrorMessage(
           )?.message
         : undefined
     if (fieldMessage) return fieldMessage
-    if (candidate.response?.message && candidate.response.message !== 'Failed to authenticate.')
+    const MENSAGENS_GENERICAS = [
+      'something went wrong while processing your request.',
+      'failed to authenticate.',
+    ]
+    if (
+      candidate.response?.message &&
+      !MENSAGENS_GENERICAS.includes(candidate.response.message.toLowerCase())
+    )
       return candidate.response.message
-    if (candidate.message && !candidate.message.toLowerCase().includes('autocancelled'))
+    if (
+      candidate.message &&
+      !MENSAGENS_GENERICAS.includes(candidate.message.toLowerCase()) &&
+      !candidate.message.toLowerCase().includes('autocancelled')
+    )
       return candidate.message
   }
   return fallback
