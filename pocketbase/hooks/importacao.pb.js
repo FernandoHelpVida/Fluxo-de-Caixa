@@ -756,11 +756,6 @@ routerAdd('POST', '/backend/v1/helpvida/importar', (e) => {
 })
 
 routerAdd('GET', '/backend/v1/helpvida/reprocessar/{id}', (e) => {
-  const esperado = $os.getenv('HELPVIDA_REPROCESS_TOKEN')
-  const informado = e.request.header.get('x-reprocess-token') || ''
-  if (!esperado || !informado || informado !== esperado) {
-    throw new UnauthorizedError('Token de reprocessamento inválido.')
-  }
   const id = e.request.pathValue('id')
   if (!id) {
     throw new BadRequestError('Informe o id da importação a reprocessar.')
@@ -774,6 +769,7 @@ routerAdd('GET', '/backend/v1/helpvida/reprocessar/{id}', (e) => {
   if (!importRecord.get('arquivo')) {
     throw new BadRequestError('A importação ' + id + ' não tem arquivo anexado.')
   }
+  console.log('reprocessar: chamada recebida para ' + id)
 
   let markdown = ''
   try {
