@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { ArrowDownToLine, ArrowUpFromLine, CalendarRange, Scale } from 'lucide-react'
 import { BalanceLineChart, FlowBarChart } from '@/components/FlowChart'
 import { ErrorState, PageLoader } from '@/components/PageStates'
@@ -17,7 +18,8 @@ import {
 import { addDays, formatCurrency, formatDate, toInputDate } from '@/lib/format'
 
 export default function Flow() {
-  const [anchor, setAnchor] = useState(toInputDate(new Date()))
+  const [searchParams] = useSearchParams()
+  const [anchor, setAnchor] = useState(() => searchParams.get('data') || toInputDate(new Date()))
   const { payables, receivables, availabilities, loading, error, reload } = useFinanceData()
   const available = useMemo(() => currentAvailability(availabilities), [availabilities])
   const daily = useMemo(

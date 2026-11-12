@@ -21,6 +21,17 @@ import { buildDailyFlow, currentAvailability, sumValues } from '@/lib/finance-ca
 import { formatCurrency, formatDate, parsePocketDate, startOfWeek, toInputDate } from '@/lib/format'
 import type { FinanceFilters } from '@/types/finance'
 
+function filtersToQuery(filters: FinanceFilters): string {
+  const params = new URLSearchParams()
+  if (filters.inicio) params.set('inicio', filters.inicio)
+  if (filters.fim) params.set('fim', filters.fim)
+  if (filters.categoria) params.set('categoria', filters.categoria)
+  if (filters.conta) params.set('conta', filters.conta)
+  if (filters.departamento) params.set('departamento', filters.departamento)
+  const query = params.toString()
+  return query ? `?${query}` : ''
+}
+
 export default function Dashboard() {
   const [filters, setFilters] = useState<FinanceFilters>(EMPTY_FILTERS)
   const { payables, receivables, availabilities, loading, error, reload } = useFinanceData(filters)
@@ -46,6 +57,7 @@ export default function Dashboard() {
     sunday.setDate(sunday.getDate() + 6)
     const weekStart = toInputDate(monday)
     const weekEnd = toInputDate(sunday)
+    const weekQuery = `?data=${weekStart}&fim=${weekEnd}`
     const weekOut = sumValues(
       payables.filter(
         (row) => row.previsao.slice(0, 10) >= weekStart && row.previsao.slice(0, 10) <= weekEnd,
@@ -65,6 +77,7 @@ export default function Dashboard() {
       weekPosition: available + weekIn - weekOut,
       weekIn,
       weekOut,
+      weekQuery,
     }
   }, [payables, receivables, availabilities])
 
@@ -119,6 +132,8 @@ export default function Dashboard() {
           icon={ArrowUpFromLine}
           tone="yellow"
           trend="negative"
+          to={`/contas-a-pagar${filtersToQuery(filters)}`}
+          hint="Consultar lançamentos"
         />
         <StatCard
           label="A receber"
@@ -127,6 +142,8 @@ export default function Dashboard() {
           icon={ArrowDownToLine}
           tone="teal"
           trend="positive"
+          to="/contas-a-receber"
+          hint="Consultar recebimentos"
         />
         <StatCard
           label="Saldo disponível"
@@ -134,6 +151,8 @@ export default function Dashboard() {
           helper={`${new Set(availabilities.map((row) => row.conta_corrente)).size} contas informadas`}
           icon={WalletCards}
           tone="green"
+          to="/disponibilidades"
+          hint="Consultar disponibilidades"
         />
         <StatCard
           label="Posição da semana"
@@ -142,6 +161,8 @@ export default function Dashboard() {
           icon={CalendarDays}
           tone="slate"
           trend={values.weekPosition >= 0 ? 'positive' : 'negative'}
+          to={`/fluxo${values.weekQuery}`}
+          hint="Abrir fluxo da semana"
         />
       </div>
 

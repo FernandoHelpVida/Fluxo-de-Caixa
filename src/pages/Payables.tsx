@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight, CircleDollarSign, FileSpreadsheet } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { FilterBar } from '@/components/FilterBar'
 import { EmptyState, ErrorState, PageLoader } from '@/components/PageStates'
 import { Badge } from '@/components/ui/badge'
@@ -13,8 +13,20 @@ import type { FinanceFilters, Payable } from '@/types/finance'
 
 const PER_PAGE = 20
 
+function filtersFromParams(params: URLSearchParams): FinanceFilters {
+  return {
+    inicio: params.get('inicio') || '',
+    fim: params.get('fim') || '',
+    categoria: params.get('categoria') || '',
+    conta: params.get('conta') || '',
+    departamento: params.get('departamento') || '',
+  }
+}
+
 export default function Payables() {
-  const [filters, setFilters] = useState<FinanceFilters>(EMPTY_FILTERS)
+  const [searchParams] = useSearchParams()
+  const [filters, setFilters] = useState<FinanceFilters>(() => filtersFromParams(searchParams))
+  const incomingFilters = searchParams.toString()
   const [search, setSearch] = useState('')
   const [rows, setRows] = useState<Payable[]>([])
   const [allRows, setAllRows] = useState<Payable[]>([])
@@ -54,6 +66,11 @@ export default function Payables() {
   useEffect(() => {
     setPage(1)
   }, [filters])
+  // Quando o Dashboard navega com filtros novos, aplica-os por cima do estado local.
+  useEffect(() => {
+    setFilters(filtersFromParams(searchParams))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incomingFilters])
 
   const options = useMemo(
     () => ({
