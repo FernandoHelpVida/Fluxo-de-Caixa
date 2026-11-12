@@ -8,6 +8,14 @@
 //   | Previsão | Razão Social | Data de Vencimento (completa) | Registro |
 //   | Categoria | Conta Corrente | Nota Fiscal | A Pagar ou Receber | Departamento |
 // Datas em ISO, valores como "-R$ 10,000.00", linha de total sem rótulo.
+//
+// Fluxo do handler:
+//   1. 401 se a requisição não trouxer sessão válida.
+//   2. Cria o registro de histórico em "importacoes" com status "processando"
+//      ANTES de qualquer processamento (o arquivo segue anexado ao registro).
+//   3. Converte o xlsx em Markdown e processa.
+//   4. Qualquer falha marca o histórico como "erro" com mensagem específica
+//      em português e devolve BadRequestError (o toast mostra essa mensagem).
 
 routerAdd('POST', '/backend/v1/helpvida/importar', (e) => {
   // ---- Reconhecimento de texto ----
@@ -279,15 +287,13 @@ routerAdd('POST', '/backend/v1/helpvida/importar', (e) => {
       value.indexOf('valor original') >= 0
     )
       return 'valor'
-    if (value.indexOf('contas a pagar') < 0) {
-      if (
-        value.indexOf('a pagar ou receber') >= 0 ||
-        value.indexOf('pagar ou receber') >= 0 ||
-        value.indexOf('a pagar') >= 0 ||
-        value.indexOf('a receber') >= 0
-      )
-        return 'valor'
-    }
+    if (
+      value.indexOf('a pagar ou receber') >= 0 ||
+      value.indexOf('pagar ou receber') >= 0 ||
+      value.indexOf('a pagar') >= 0 ||
+      value.indexOf('a receber') >= 0
+    )
+      return 'valor'
     if (
       value.indexOf('departamento') >= 0 ||
       value.indexOf('centro de custo') >= 0 ||
@@ -474,15 +480,16 @@ routerAdd('POST', '/backend/v1/helpvida/importar', (e) => {
         })
 
         const previsaoRaw = cellAt('previsao') || cellAt('vencimento')
-        const previsao = normalizarData(previsaoRaw)
+        const previsao = previsaoRaw ? normalizarData(previsaoRaw) : ''
         if (!previsao) {
           issues.push({
             line: row.line,
-            type: 'data_invalida',
-            description:
-              'Data de previsão ou vencimento não reconhecida no valor "' +
-              previsaoRaw.slice(0, 60) +
-              '".',
+            type: previsaoRaw ? 'data_invalida' : 'linha_ignorada',
+            description: previsaoRaw
+              ? 'Data de previsão ou vencimento não reconhecida no valor "' +
+                previsaoRaw.slice(0, 60) +
+                '".'
+              : 'Linha sem data de previsão nem de vencimento; removida da consolidação.',
             content: content,
           })
           continue
@@ -613,26 +620,161 @@ routerAdd('POST', '/backend/v1/helpvida/importar', (e) => {
 
   // ---- Handler ----
 
+  if (!e.auth || !e.auth.id) {
+    throw new ApiError(401, 'Sua sessão expirou. Faça login novamente.')
+  }
+
   const files = e.findUploadedFiles('arquivo')
   if (!files || !files.length) {
     throw new BadRequestError(
       'Nenhum arquivo foi enviado. Selecione a planilha .xlsx da pivot do OMIE.',
     )
   }
+
+  let nomeArquivo = 'pivot-omie.xlsx'
+  try {
+    const body = e.requestInfo().body
+    const informado = body && body.nome_arquivo ? String(body.nome_arquivo) : ''
+    if (informado.trim()) nomeArquivo = informado.trim().slice(0, 200)
+  } catch (_) {}
+
+  // O histórico é criado ANTES de qualquer processamento, com o arquivo anexado.
+  let importRecord
+  try {
+    const importCollection = $app.findCollectionByNameOrId('importacoes')
+    importRecord = new Record(importCollection)
+    importRecord.set('arquivo', files[0])
+    importRecord.set('nome_arquivo', nomeArquivo)
+    importRecord.set('status', 'processando')
+    $app.save(importRecord)
+  } catch (err) {
+    console.error(
+      'importar: falha ao criar registro de histórico: ' + (err && err.stack ? err.stack : err),
+    )
+    throw new BadRequestError(
+      'Não foi possível gravar o histórico da importação: ' +
+        (err && err.message ? err.message : 'motivo desconhecido') +
+        '.',
+    )
+  }
+
+  function marcarErroHistorico(mensagem) {
+    try {
+      importRecord.set('status', 'erro')
+      importRecord.set('mensagem', String(mensagem).slice(0, 500))
+      $app.save(importRecord)
+    } catch (_) {}
+  }
+
   let markdown = ''
   try {
-    const converted = $documents.toMarkdown({ file: files[0] })
+    const converted = $documents.toMarkdown({ record: importRecord, field: 'arquivo' })
     markdown = String((converted && converted.markdown) || '')
   } catch (err) {
     console.error('importar: falha ao converter xlsx: ' + (err && err.stack ? err.stack : err))
+    marcarErroHistorico('Não foi possível ler a planilha enviada.')
     throw new BadRequestError(
       'Não foi possível ler a planilha enviada. Confirme que é um arquivo .xlsx válido do OMIE.',
     )
   }
   if (!markdown.trim()) {
+    marcarErroHistorico('A planilha enviada está vazia ou não pôde ser convertida.')
     throw new BadRequestError(
       'A planilha enviada está vazia ou não pôde ser convertida. Reexporte a pivot do OMIE e tente novamente.',
     )
+  }
+
+  const result = processarMarkdown(markdown)
+  if (!result.foundHeader) {
+    const principal = result.issues.length
+      ? result.issues[0].description
+      : 'Não foi encontrada uma tabela com colunas de data e valor.'
+    marcarErroHistorico(principal)
+    throw new BadRequestError(principal)
+  }
+  if (!result.entries.length) {
+    const mensagem =
+      'A pivot foi lida, mas nenhum lançamento válido foi encontrado. Confira os dados da planilha.'
+    marcarErroHistorico(mensagem)
+    throw new BadRequestError(mensagem)
+  }
+
+  const periodos = {}
+  result.entries.forEach((entry) => {
+    periodos[entry.periodo] = true
+  })
+
+  let datas = { minDate: '', maxDate: '' }
+  try {
+    datas = consolidar($app, importRecord.id, result, periodos)
+  } catch (err) {
+    console.error('importar: falha ao consolidar: ' + (err && err.stack ? err.stack : err))
+    marcarErroHistorico(
+      'Erro ao gravar os lançamentos: ' + (err && err.message ? err.message : 'erro interno') + '.',
+    )
+    throw new BadRequestError(
+      'A leitura da pivot funcionou, mas ocorreu um erro ao gravar os lançamentos. Tente novamente.',
+    )
+  }
+
+  return e.json(200, {
+    id: importRecord.id,
+    status: importRecord.get('status'),
+    total_linhas: result.totalRows,
+    total_importadas: result.entries.length,
+    total_ignoradas: result.issues.length,
+    periodo_inicio: datas.minDate,
+    periodo_fim: datas.maxDate,
+    message:
+      result.entries.length +
+      ' lançamentos consolidados' +
+      (result.issues.length
+        ? ' e ' + result.issues.length + ' linhas sinalizadas.'
+        : ' sem inconsistências.'),
+  })
+})
+
+// ---- Rota temporária de diagnóstico/reprocessamento (remover depois de validar) ----
+// GET /backend/v1/helpvida/reprocessar/{id}
+// Reprocessa o arquivo JÁ armazenado num registro de "importacoes" usando o
+// mesmo fluxo do POST /importar (mesmo parser, mesmo consolidador). Serve para
+// provar a gravação ponta a ponta sem navegador. Exige superuser via token.
+routerAdd('GET', '/backend/v1/helpvida/reprocessar/{id}', (e) => {
+  const esperado = $os.getenv('HELPVIDA_REPROCESS_TOKEN')
+  if (!esperado || e.request.header('x-reprocess-token') !== esperado) {
+    throw new UnauthorizedError('Token de reprocessamento inválido.')
+  }
+  const id = e.request.pathValue('id')
+  if (!id) {
+    throw new BadRequestError('Informe o id da importação a reprocessar.')
+  }
+  let importRecord
+  try {
+    importRecord = $app.findRecordById('importacoes', id)
+  } catch (err) {
+    throw new NotFoundError('Importação ' + id + ' não encontrada.')
+  }
+  if (!importRecord.get('arquivo')) {
+    throw new BadRequestError('A importação ' + id + ' não tem arquivo anexado.')
+  }
+
+  let markdown = ''
+  try {
+    const converted = $documents.toMarkdown({
+      record: importRecord,
+      field: 'arquivo',
+    })
+    markdown = String((converted && converted.markdown) || '')
+  } catch (err) {
+    console.error('reprocessar: falha ao converter xlsx: ' + (err && err.stack ? err.stack : err))
+    throw new BadRequestError(
+      'Não foi possível ler a planilha armazenada: ' +
+        (err && err.message ? err.message : 'erro desconhecido') +
+        '.',
+    )
+  }
+  if (!markdown.trim()) {
+    throw new BadRequestError('A planilha armazenada está vazia ou não pôde ser convertida.')
   }
 
   const result = processarMarkdown(markdown)
@@ -653,35 +795,51 @@ routerAdd('POST', '/backend/v1/helpvida/importar', (e) => {
     periodos[entry.periodo] = true
   })
 
-  let importRecord
+  let datas = { minDate: '', maxDate: '' }
   try {
-    importRecord = $app.findRecordById('importacoes', info.context().id)
-  } catch (_) {
-    throw new BadRequestError('Importação não encontrada para atualizar o histórico.')
-  }
-
-  try {
-    consolidar($app, importRecord.id, result, periodos)
+    datas = consolidar($app, importRecord.id, result, periodos)
   } catch (err) {
-    console.error('importar: falha ao consolidar: ' + (err && err.stack ? err.stack : err))
+    console.error('reprocessar: falha ao consolidar: ' + (err && err.stack ? err.stack : err))
     throw new BadRequestError(
       'A leitura da pivot funcionou, mas ocorreu um erro ao gravar os lançamentos. Tente novamente.',
     )
   }
 
+  try {
+    importRecord.set('status', result.issues.length ? 'concluida_com_alertas' : 'concluida')
+    importRecord.set('total_linhas', result.totalRows)
+    importRecord.set('total_importadas', result.entries.length)
+    importRecord.set('total_ignoradas', result.issues.length)
+    importRecord.set('periodo_inicio', datas.minDate)
+    importRecord.set('periodo_fim', datas.maxDate)
+    importRecord.set(
+      'mensagem',
+      result.issues.length
+        ? result.entries.length +
+            ' lançamentos consolidados e ' +
+            result.issues.length +
+            ' linhas sinalizadas.'
+        : result.entries.length + ' lançamentos consolidados sem inconsistências.',
+    )
+    $app.save(importRecord)
+  } catch (err) {
+    console.error(
+      'reprocessar: falha ao atualizar histórico: ' + (err && err.stack ? err.stack : err),
+    )
+    throw new BadRequestError(
+      'Não foi possível atualizar o histórico da importação: ' +
+        (err && err.message ? err.message : 'motivo desconhecido') +
+        '.',
+    )
+  }
+
   return e.json(200, {
     id: importRecord.id,
-    status: result.issues.length ? 'concluida_com_alertas' : 'concluida',
+    status: importRecord.get('status'),
     total_linhas: result.totalRows,
     total_importadas: result.entries.length,
     total_ignoradas: result.issues.length,
-    periodo_inicio: minDate,
-    periodo_fim: maxDate,
-    message:
-      result.entries.length +
-      ' lançamentos consolidados' +
-      (result.issues.length
-        ? ' e ' + result.issues.length + ' linhas sinalizadas.'
-        : ' sem inconsistências.'),
+    periodo_inicio: datas.minDate,
+    periodo_fim: datas.maxDate,
   })
 })
