@@ -125,10 +125,23 @@ export async function listImportIssues(importId: string): Promise<ImportIssue[]>
 }
 
 export async function importOmieSpreadsheet(file: File): Promise<ImportResult> {
+  if (!pb.authStore.isValid)
+    throw new Error('Sua sessão expirou. Faça login novamente para importar a planilha.')
   const form = new FormData()
   form.set('arquivo', file)
-  return pb.send('/backend/v1/helpvida/importar', {
-    method: 'POST',
-    body: form,
-  }) as Promise<ImportResult>
+  try {
+    return (await pb.send('/backend/v1/helpvida/importar', {
+      method: 'POST',
+      body: form,
+    })) as ImportResult
+  } catch (reason) {
+    const candidate = reason as { status?: number; response?: { status?: number } }
+    const status = candidate?.status ?? candidate?.response?.status
+    if (status === 401) {
+      pb.authStore.clear()
+      window.dispatchEvent(new Event('helpvida:refresh'))
+      throw new Error('Sua sessão expirou. Faça login novamente para importar a planilha.')
+    }
+    throw reason
+  }
 }
