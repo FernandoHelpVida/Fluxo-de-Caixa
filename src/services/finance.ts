@@ -124,6 +124,14 @@ export async function listImportIssues(importId: string): Promise<ImportIssue[]>
   return records as unknown as ImportIssue[]
 }
 
+export async function limparImportacoesComErro(): Promise<{ apagadas: number }> {
+  if (!pb.authStore.isValid)
+    throw new Error('Sua sessão expirou. Faça login novamente para limpar o histórico.')
+  return (await pb.send('/backend/v1/helpvida/limpar-importacoes-com-erro', {
+    method: 'POST',
+  })) as { apagadas: number }
+}
+
 export async function importOmieSpreadsheet(file: File): Promise<ImportResult> {
   if (!pb.authStore.isValid)
     throw new Error('Sua sessão expirou. Faça login novamente para importar a planilha.')

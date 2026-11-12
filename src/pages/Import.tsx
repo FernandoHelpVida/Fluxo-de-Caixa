@@ -6,6 +6,7 @@ import {
   History,
   LoaderCircle,
   RefreshCw,
+  Trash2,
   UploadCloud,
   XCircle,
 } from 'lucide-react'
@@ -25,7 +26,12 @@ import {
 } from '@/components/ui/sheet'
 import { useToast } from '@/hooks/use-toast'
 import { formatDate, formatDateTime, getErrorMessage } from '@/lib/format'
-import { importOmieSpreadsheet, listImportIssues, listImports } from '@/services/finance'
+import {
+  importOmieSpreadsheet,
+  limparImportacoesComErro,
+  listImportIssues,
+  listImports,
+} from '@/services/finance'
 import type { ImportIssue, ImportRecord } from '@/types/finance'
 
 const statusConfig = {
@@ -53,6 +59,7 @@ export default function ImportPage() {
   const [imports, setImports] = useState<ImportRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
+  const [limpando, setLimpando] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [error, setError] = useState('')
   const [selected, setSelected] = useState<ImportRecord | null>(null)
@@ -124,6 +131,28 @@ export default function ImportPage() {
 
   function fileChange(event: ChangeEvent<HTMLInputElement>) {
     void processFile(event.target.files?.[0])
+  }
+  async function limparComErro() {
+    setLimpando(true)
+    try {
+      const result = await limparImportacoesComErro()
+      await load()
+      toast({
+        title: 'Histórico limpo',
+        description:
+          result.apagadas === 0
+            ? 'Nenhuma tentativa com erro encontrada no histórico.'
+            : `${result.apagadas} tentativa(s) com erro apagada(s) do histórico.`,
+      })
+    } catch (reason) {
+      toast({
+        variant: 'destructive',
+        title: 'Falha ao limpar o histórico',
+        description: getErrorMessage(reason, 'Tente novamente em instantes.'),
+      })
+    } finally {
+      setLimpando(false)
+    }
   }
   function drop(event: DragEvent) {
     event.preventDefault()
@@ -253,6 +282,22 @@ export default function ImportPage() {
               Últimos arquivos processados e seus resultados
             </p>
           </div>
+          {imports.some((item) => item.status === 'erro') && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={limpando}
+              className="border-red-200 text-red-700 hover:bg-red-50"
+              onClick={() => void limparComErro()}
+            >
+              {limpando ? (
+                <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="mr-2 h-4 w-4" />
+              )}
+              Limpar tentativas com erro
+            </Button>
+          )}
         </CardHeader>
         {imports.length === 0 ? (
           <EmptyState
