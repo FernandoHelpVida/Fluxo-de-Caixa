@@ -518,8 +518,10 @@ routerAdd('GET', '/backend/v1/helpvida/reprocessar/{id}', (e) => {
         periodos[entry.periodo] = true
       })
 
+      // Declarada fora da transação para que o valor chegue ao retorno.
+      let substituidas = 0
       appLike.runInTransaction((tx) => {
-        const substituidas = apagarImportacoesAnteriores(tx, Object.keys(periodos), importId)
+        substituidas = apagarImportacoesAnteriores(tx, Object.keys(periodos), importId)
 
         Object.keys(periodos).forEach((period) => {
           const filter = "periodo = '" + String(period).replace(/'/g, "''") + "'"
