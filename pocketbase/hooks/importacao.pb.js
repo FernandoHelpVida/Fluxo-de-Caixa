@@ -229,18 +229,19 @@ routerAdd('POST', '/backend/v1/helpvida/importar', (e) => {
         negative = true
         text = text.slice(1)
       }
+      // A pivot do OMIE chega com números "puros" do xlsx: PONTO como separador
+      // decimal (ex. -2034.768, -269496.849927), com 3 a 6 casas. Células de
+      // texto podem trazer BR (-1.234,56) ou US (-10,000.00). Regra: quando
+      // vírgula e ponto coexistem, o ÚLTIMO é o decimal e o outro é milhar;
+      // um separador sozinho é SEMPRE decimal — nunca milhar. As regras antigas
+      // que descartavam a vírgula com mais de 2 casas (ou o ponto com mais de
+      // 2) multiplicavam o valor por 1000 (ex. -2034.768 -> -2034768).
       const comma = text.lastIndexOf(',')
       const dot = text.lastIndexOf('.')
       if (comma >= 0 && dot >= 0) {
         text = comma > dot ? text.replace(/\./g, '').replace(',', '.') : text.replace(/,/g, '')
       } else if (comma >= 0) {
-        const decimals = text.length - comma - 1
-        text =
-          decimals > 0 && decimals <= 2
-            ? text.replace(/\./g, '').replace(',', '.')
-            : text.replace(/,/g, '')
-      } else if (dot >= 0 && text.length - dot - 1 > 2) {
-        text = text.replace(/\./g, '')
+        text = text.replace(',', '.')
       }
       const value = Number(text)
       if (!Number.isFinite(value)) return null
