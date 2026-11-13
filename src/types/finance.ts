@@ -82,4 +82,5 @@ export type ImportResult = {
   total_ignoradas: number
   periodo_inicio: string
   periodo_fim: string
+  substituidas?: number
 }

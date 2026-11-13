@@ -113,7 +113,12 @@ export default function ImportPage() {
           result.status === 'concluida'
             ? 'Importação concluída'
             : 'Importação concluída com alertas',
-        description: `${result.total_importadas} lançamentos consolidados e ${result.total_ignoradas} linhas sinalizadas.`,
+        description:
+          `${result.total_importadas} lançamentos consolidados do período` +
+          (result.substituidas
+            ? ` (${result.substituidas} importação(ões) anterior(es) do período substituída(s))`
+            : ' (nenhuma importação anterior do período para substituir)') +
+          ` e ${result.total_ignoradas} linhas sinalizadas.`,
       })
       window.dispatchEvent(new Event('helpvida:refresh'))
     } catch (reason) {
@@ -185,8 +190,9 @@ export default function ImportPage() {
         <RefreshCw className="h-4 w-4 text-[#0A8267]" />
         <AlertTitle className="font-semibold">Substituição inteligente por período</AlertTitle>
         <AlertDescription className="text-[#5E756D]">
-          Cada nova importação substitui apenas os meses presentes no arquivo. Se houver erro de
-          leitura, os lançamentos atuais são preservados.
+          Cada nova importação substitui os meses presentes no arquivo: os lançamentos e o histórico
+          daquele período são sobrescritos, nunca acumulados. Se houver erro de leitura, os
+          lançamentos atuais são preservados.
         </AlertDescription>
       </Alert>
       <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">

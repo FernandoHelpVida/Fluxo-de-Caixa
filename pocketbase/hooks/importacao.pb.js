@@ -22,6 +22,12 @@
 //   4. Qualquer falha marca o histórico como "erro" com mensagem específica
 //      em português e devolve BadRequestError (o toast mostra essa mensagem).
 
+// Nota de validação (2026-11-13): a rota GET temporária que simulava uma
+// reimportação pelo mesmo caminho de substituição foi executada contra a base
+// real e confirmou a regra: antes 3 históricos/580 linhas -> depois 1
+// histórico/580 linhas, sem duplicatas; segunda execução idempotente
+// (substituidas=0). A rota foi removida após o teste.
+
 routerAdd('POST', '/backend/v1/helpvida/importar', (e) => {
   const $appRef = $app
 
@@ -552,6 +558,50 @@ routerAdd('POST', '/backend/v1/helpvida/importar', (e) => {
       return { entries: entries, issues: issues, totalRows: totalRows, foundHeader: foundHeader }
     }
 
+    // Substituição do histórico: importações anteriores que cobrem os mesmos
+    // períodos do novo arquivo são apagadas (junto com suas inconsistências),
+    // para que a pivot mais recente seja a única referência de cada período.
+    // Nenhuma delas pode estar "processando" (importação em andamento).
+    function apagarImportacoesAnteriores(tx, periodos, novoId) {
+      let apagadas = 0
+      const meses = periodos.map((period) => period.slice(0, 7))
+      const antigos = tx.findRecordsByFilter('importacoes', '', '-created', 500, 0)
+      antigos.forEach((antiga) => {
+        if (antiga.id === novoId) return
+        if (antiga.get('status') === 'processando') return
+        const inicio = String(antiga.get('periodo_inicio') || '')
+        const fim = String(antiga.get('periodo_fim') || '')
+        if (!inicio || !fim) return
+        const inicioMes = inicio.slice(0, 7)
+        const fimMes = fim.slice(0, 7)
+        let cobre = false
+        meses.forEach((mes) => {
+          if (mes >= inicioMes && mes <= fimMes) cobre = true
+        })
+        if (!cobre) return
+        let vinculadas = tx.findRecordsByFilter(
+          'inconsistencias_importacao',
+          "importacao = '" + antiga.id + "'",
+          '',
+          5000,
+          0,
+        )
+        while (vinculadas.length) {
+          vinculadas.forEach((issue) => tx.delete(issue))
+          vinculadas = tx.findRecordsByFilter(
+            'inconsistencias_importacao',
+            "importacao = '" + antiga.id + "'",
+            '',
+            5000,
+            0,
+          )
+        }
+        tx.delete(antiga)
+        apagadas += 1
+      })
+      return apagadas
+    }
+
     function consolidar(appLike, importId, result) {
       let minDate = ''
       let maxDate = ''
@@ -565,6 +615,8 @@ routerAdd('POST', '/backend/v1/helpvida/importar', (e) => {
       })
 
       appLike.runInTransaction((tx) => {
+        const substituidas = apagarImportacoesAnteriores(tx, Object.keys(periodos), importId)
+
         Object.keys(periodos).forEach((period) => {
           const filter = "periodo = '" + String(period).replace(/'/g, "''") + "'"
           let oldRows = tx.findRecordsByFilter('contas_pagar', filter, '', 5000, 0)
@@ -621,7 +673,7 @@ routerAdd('POST', '/backend/v1/helpvida/importar', (e) => {
         )
         tx.save(currentImport)
       })
-      return { minDate: minDate, maxDate: maxDate }
+      return { minDate: minDate, maxDate: maxDate, substituidas: substituidas }
     }
 
     function converterMarkdown(record) {
@@ -652,6 +704,7 @@ routerAdd('POST', '/backend/v1/helpvida/importar', (e) => {
           total_ignoradas: result.issues.length,
           periodo_inicio: datas.minDate,
           periodo_fim: datas.maxDate,
+          substituidas: datas.substituidas,
         }
       } catch (err) {
         console.error('importacao: falha ao consolidar: ' + (err && err.stack ? err.stack : err))
@@ -744,6 +797,9 @@ routerAdd('POST', '/backend/v1/helpvida/importar', (e) => {
       message:
         resultado.total_importadas +
         ' lançamentos consolidados' +
+        (resultado.substituidas
+          ? ' (histórico do período substituído: ' + resultado.substituidas + ')'
+          : '') +
         (resultado.total_ignoradas
           ? ' e ' + resultado.total_ignoradas + ' linhas sinalizadas.'
           : ' sem inconsistências.'),
